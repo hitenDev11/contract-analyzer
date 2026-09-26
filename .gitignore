@@ -1,0 +1,13 @@
+# Dependencies
+node_modules/
+
+# Environment variables (NEVER commit these - contains API keys/secrets)
+.env
+
+# Build output
+dist/
+build/
+
+# OS/editor files
+.DS_Store
+.vscode/
