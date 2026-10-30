@@ -1,5 +1,7 @@
 import express from 'express';
 import cors from 'cors';
+import authRoutes from './routes/auth.routes';
+import { errorHandler } from './middleware/errorHandler.middleware';
 
 const app = express();
 
@@ -16,5 +18,11 @@ app.get('/health', (_req, res) => {
     timestamp: new Date().toISOString(),
   });
 });
+
+// Authentication routes
+app.use('/api/auth', authRoutes);
+
+// Global error handling middleware (must be registered after routes)
+app.use(errorHandler);
 
 export default app;

@@ -7,9 +7,10 @@ interface FlaggedRisk extends Document {
 }
 
 export interface contract extends Document {
-    userId:  Types.ObjectId,
+    userId: Types.ObjectId,
     fileName: string,
-    originalFileURL:string,
+    originalFileURL: string,
+    cloudinaryPublicId?: string,
     status: 'processing' | 'ready' | 'failed',
     flaggedRisks: FlaggedRisk[]
 }
@@ -27,6 +28,10 @@ const contractSchema = new Schema<contract>({
     originalFileURL:{
         type:String,
         required:true
+    },
+    cloudinaryPublicId:{
+        type:String,
+        required:false
     },
     status:{
         type:String,
@@ -47,4 +52,4 @@ const contractSchema = new Schema<contract>({
     timestamps:true
 })
 
-export default mongoose.model<contract>('Contract',contractSchema)
+export default mongoose.model<contract>('Contract',contractSchema);

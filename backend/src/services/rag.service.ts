@@ -4,8 +4,6 @@ import ContractModel from '../models/contract.model';
 import { getEmbedding, callAI, safeParseJSON, TaskType } from './aiClient.service';
 
 
-
-
 export interface RagSearchConfig {
   /** Name of the Atlas Vector Search index on the `contractchunks` collection */
   vectorIndexName: string;
@@ -329,9 +327,6 @@ export const retrieveRelevantChunks = async (
   }));
 };
 
-// ----------------------------------------------------------------------------
-// 6. Answer Generation & Validation Helpers
-// ----------------------------------------------------------------------------
 
 const VALID_CONFIDENCE_LEVELS = ['high', 'medium', 'low', 'insufficient_information'] as const;
 type ConfidenceLevel = (typeof VALID_CONFIDENCE_LEVELS)[number];
@@ -345,10 +340,7 @@ const normalizeWhitespace = (text: string): string => {
   return text.replace(/\s+/g, ' ').trim();
 };
 
-/**
- * Checks if a quotation from directEvidence actually appears in any of the supplied contract chunks.
- * Handles harmless whitespace differences (like line breaks or extra spacing) and surrounding quotes.
- */
+
 const quoteAppearsInChunks = (
   quote: string,
   normalizedChunks: string[]
@@ -378,10 +370,7 @@ const quoteAppearsInChunks = (
   return false;
 };
 
-/**
- * Creates a safe fallback ContractAnswerResult when AI response cannot be parsed or validated.
- * Ensures empty citations and empty directEvidence so unverified text is never presented as factual findings.
- */
+
 const createSafeFallback = (reason?: string): ContractAnswerResult => ({
   answer: 'Unable to determine a verified answer from the contract. The AI response was malformed or could not be validated against the contract text.',
   confidence: 'insufficient_information',
@@ -390,15 +379,6 @@ const createSafeFallback = (reason?: string): ContractAnswerResult => ({
   interpretation: reason,
 });
 
-/**
- * Generates an accurate, grounded answer using Google Gemini 2.0 Flash.
- * Enforces strict runtime validation, citation bounds checking, direct evidence verification,
- * anti-hallucination guardrails, and prompt injection defenses.
- * 
- * @param question The user's question
- * @param chunks The retrieved contract chunks to use as ground truth context
- * @returns Structured answer object with citations, confidence, and direct evidence
- */
 export const generateContractAnswer = async (
   question: string,
   chunks: RetrievedChunk[]
