@@ -11,10 +11,9 @@ import { AppError } from '../middleware/errorHandler.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { MAX_FILE_SIZE } from '../middleware/upload.middleware';
 
-/**
- * Helper: Ensures file data is available as a Buffer regardless of whether
- * Multer was configured with memoryStorage or diskStorage.
- */
+
+
+
 const getFileBuffer = async (file: Express.Multer.File): Promise<Buffer> => {
   if (file.buffer && Buffer.isBuffer(file.buffer)) {
     return file.buffer;
@@ -27,9 +26,6 @@ const getFileBuffer = async (file: Express.Multer.File): Promise<Buffer> => {
   throw new AppError('Unable to read uploaded file data from storage.', 400);
 };
 
-/**
- * Helper: Safely cleans up temporary files created on disk if diskStorage was used.
- */
 const cleanTempDiskFile = async (filePath?: string): Promise<void> => {
   if (!filePath) return;
   try {
@@ -41,24 +37,6 @@ const cleanTempDiskFile = async (filePath?: string): Promise<void> => {
   }
 };
 
-/**
- * Controller: Handles contract upload, text extraction, chunking,
- * cloud storage persistence (Cloudinary), embedding generation, and vector persistence.
- *
- * Pipeline:
- * 1. Validates that a PDF file was uploaded.
- * 2. Checks file MIME-type, extension, and enforces size limit.
- * 3. Retrieves authenticated user ID from req.userId.
- * 4. Extracts text from the PDF using pdfParser.service (serving as structural validation).
- * 5. Splits the text into overlapping chunks using splitIntoChunks.
- * 6. Uploads the PDF buffer to Cloudinary (private/authenticated storage) via storage.service.
- * 7. Creates a Contract document in MongoDB with status 'processing'.
- * 8. Generates vector embeddings for each chunk sequentially via aiClient.service (TaskType.RETRIEVAL_DOCUMENT).
- * 9. Saves all chunk records in MongoDB using ContractChunk model.
- * 10. Updates contract status to 'ready' on success.
- * 11. On failure: removes the uploaded Cloudinary asset, deletes contract chunks,
- *     updates contract status to 'failed', and preserves the original error without swallowing it.
- */
 export const uploadContract = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate file presence
   if (!req.file) {
@@ -234,16 +212,6 @@ export const uploadContract = asyncHandler(async (req: Request, res: Response): 
   }
 });
 
-/**
- * Controller: Retrieves a concise list of all contracts belonging to the authenticated user.
- *
- * Pipeline:
- * 1. Retrieves and validates the authenticated user ID from req.userId.
- * 2. Queries ContractModel for records where userId matches the authenticated user.
- * 3. Restricts returned fields to _id, fileName, status, and createdAt.
- * 4. Sorts results in descending order by createdAt (newest first).
- * 5. Returns a consistent JSON response.
- */
 export const getUserContracts = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate authenticated user
   const userId = req.userId;
@@ -266,16 +234,6 @@ export const getUserContracts = asyncHandler(async (req: Request, res: Response)
   });
 });
 
-/**
- * Controller: Retrieves details for a specific contract belonging to the authenticated user.
- *
- * Pipeline:
- * 1. Validates authenticated user ID from req.userId (401 if missing or invalid).
- * 2. Validates contractId parameter from req.params.contractId (400 if invalid).
- * 3. Finds contract matching BOTH _id and userId (preventing unauthorized cross-user access).
- * 4. Selects only safe, necessary fields (_id, fileName, status, flaggedRisks, createdAt, updatedAt).
- * 5. Returns 404 if not found, or 200 with { success: true, contract }.
- */
 export const getContractById = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate authenticated user ID
   const userId = req.userId;
@@ -309,18 +267,6 @@ export const getContractById = asyncHandler(async (req: Request, res: Response):
   });
 });
 
-/**
- * Controller: Deletes a specific contract and its associated data belonging to the authenticated user.
- *
- * Pipeline:
- * 1. Validates authenticated user ID from req.userId (401 if missing or invalid).
- * 2. Validates contractId parameter from req.params.contractId (400 if invalid).
- * 3. Finds contract matching BOTH _id and userId (preventing unauthorized cross-user deletion).
- * 4. Deletes all associated chunks from ContractChunkModel.
- * 5. Deletes the PDF asset from Cloudinary using deleteContractPDF if cloudinaryPublicId exists.
- * 6. Deletes the contract document from MongoDB only after handling associated data.
- * 7. Returns 200 with { success: true, message: 'Contract deleted successfully.' }.
- */
 export const deleteContract = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate authenticated user ID
   const userId = req.userId;
@@ -363,18 +309,6 @@ export const deleteContract = asyncHandler(async (req: Request, res: Response): 
   });
 });
 
-/**
- * Controller: Generates a secure, expiring signed download URL for an authenticated user's contract PDF.
- *
- * Pipeline:
- * 1. Validates authenticated user ID from req.userId (401 if missing or invalid).
- * 2. Validates contractId parameter from req.params.contractId (400 if invalid).
- * 3. Finds contract matching BOTH _id and userId (preventing unauthorized cross-user downloads).
- * 4. Verifies contract exists (404 if not found).
- * 5. Verifies stored Cloudinary public ID exists on the contract record (404 if missing).
- * 6. Generates a signed, expiring private download URL via storage.service.
- * 7. Returns 200 with { success: true, downloadUrl }.
- */
 export const downloadContract = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate authenticated user ID
   const userId = req.userId;
