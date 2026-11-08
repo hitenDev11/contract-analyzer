@@ -23,20 +23,17 @@ export const requireAuth = (
   res: Response,
   next: NextFunction
 ): void => {
-  // 1. Read the Authorization header from the incoming request
+  
   const authHeader = req.headers.authorization;
 
-  // 2. Check if the header exists and matches the required "Bearer <token>" format
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ error: 'No token provided' });
     return; 
   }
 
-  // 3. Extract the token itself (e.g., from "Bearer abc.def.ghi", extract "abc.def.ghi")
   const token = authHeader.split(' ')[1];
 
   try {
-    // 4. Verify the secret key is configured in the environment
     const secret = process.env.JWT_SECRET;
     if (!secret) {
       console.error('JWT_SECRET environment variable is missing.');
@@ -52,7 +49,7 @@ export const requireAuth = (
     // 7. Everything is valid. Call next() to pass control to the actual route handler!
     next();
   } catch (error) {
-    // 8. If jwt.verify() throws an error, it means the token is invalid, tampered with, or expired.
+    
     res.status(401).json({ error: 'Invalid or expired token' });
   }
 };

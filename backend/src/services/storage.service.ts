@@ -105,21 +105,41 @@ export const uploadContractPDF = async (
  * 
  * @param publicId The storage identifier (public_id) of the asset to delete
  */
-export const deleteContractPDF = async (publicId: string): Promise<void> => {
-  if (!publicId || !isCloudinaryConfigured()) {
-    return;
+export const deleteContractPDF = async (
+  publicId: string
+): Promise<void> => {
+  if (!publicId) {
+    throw new Error('Cloudinary public ID is required.');
+  }
+
+  if (!isCloudinaryConfigured()) {
+    throw new Error('Cloudinary is not configured.');
   }
 
   try {
     configureCloudinary();
-    await cloudinary.uploader.destroy(publicId, {
+
+    const result = await cloudinary.uploader.destroy(publicId, {
       resource_type: 'raw',
       type: 'authenticated',
       invalidate: true,
     });
-  } catch (error: any) {
-    // Log the failure to remove the cloud asset without masking the primary processing error
-    console.error(`Failed to delete Cloudinary asset "${publicId}":`, error?.message || error);
+
+    if (
+      result.result !== 'ok' &&
+      result.result !== 'not found'
+    ) {
+      throw new Error(
+        `Cloudinary deletion failed: ${result.result}`
+      );
+    }
+  } catch (error) {
+    console.error(
+      `Failed to delete Cloudinary asset "${publicId}":`,
+      error
+    );
+
+    throw error;
   }
 };
 

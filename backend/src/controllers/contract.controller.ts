@@ -1,7 +1,5 @@
 import { Request, Response } from 'express';
-import { Types } from 'mongoose';
 import fs from 'fs';
-
 import ContractModel from '../models/contract.model';
 import ContractChunkModel from '../models/contract-chunks.model';
 import { extractTextFromPDF, splitIntoChunks } from '../services/pdfParser.service';
@@ -10,6 +8,9 @@ import { uploadContractPDF, deleteContractPDF, getSignedContractPDFUrl } from '.
 import { AppError } from '../middleware/errorHandler.middleware';
 import { asyncHandler } from '../utils/asyncHandler';
 import { MAX_FILE_SIZE } from '../middleware/upload.middleware';
+import mongoose, { Types } from 'mongoose';
+import PendingFileDeletionModel from '../models/pending-file-deletion.model';
+import ChatMessageModel from '../models/chat-message.model';
 
 
 
@@ -267,47 +268,89 @@ export const getContractById = asyncHandler(async (req: Request, res: Response):
   });
 });
 
-export const deleteContract = asyncHandler(async (req: Request, res: Response): Promise<void> => {
-  // 1. Validate authenticated user ID
-  const userId = req.userId;
-  if (!userId || !Types.ObjectId.isValid(userId)) {
-    throw new AppError('Unauthorized: A valid authenticated user ID is required.', 401);
+export const deleteContract = asyncHandler(
+  async (req: Request, res: Response): Promise<void> => {
+    // Step 1: Validate authenticated user
+    const userId = req.userId;
+
+    if (!userId || !Types.ObjectId.isValid(userId)) {
+      throw new AppError(
+        'Unauthorized: A valid authenticated user ID is required.',
+        401
+      );
+    }
+
+    // Step 2: Validate contract ID
+    const { contractId } = req.params;
+
+    if (
+      !contractId ||
+      typeof contractId !== 'string' ||
+      !Types.ObjectId.isValid(contractId)
+    ) {
+      throw new AppError('Invalid contract ID format.', 400);
+    }
+
+    const userObjectId = new Types.ObjectId(userId);
+    const contractObjectId = new Types.ObjectId(contractId);
+
+    // Step 3: Start MongoDB transaction
+    await mongoose.connection.transaction(async (session) => {
+      // Step 4: Find contract belonging to the authenticated user
+      const contract = await ContractModel.findOne({
+        _id: contractObjectId,
+        userId: userObjectId,
+      }).session(session);
+
+      if (!contract) {
+        throw new AppError('Contract not found.', 404);
+      }
+
+      // Step 5: Queue Cloudinary PDF deletion
+      if (contract.cloudinaryPublicId) {
+        await PendingFileDeletionModel.updateOne(
+          { publicId: contract.cloudinaryPublicId },
+          {
+            $setOnInsert: {
+              publicId: contract.cloudinaryPublicId,
+              attempts: 0,
+              nextRetryAt: new Date(),
+            },
+          },
+          { upsert: true, session }
+        );
+      }
+
+      // Step 6: Delete associated chat messages
+      await ChatMessageModel.deleteMany(
+        { contractId: contract._id },
+        { session }
+      );
+
+      // Step 7: Delete associated contract chunks
+      await ContractChunkModel.deleteMany(
+        { contractId: contract._id },
+        { session }
+      );
+
+      // Step 8: Delete contract document
+      await ContractModel.deleteOne(
+        {
+          _id: contract._id,
+          userId: userObjectId,
+        },
+        { session }
+      );
+    });
+
+    // Step 9: Send response after transaction commits
+    res.status(200).json({
+      success: true,
+      message:
+        'Contract deleted successfully. Cloudinary file cleanup has been scheduled.',
+    });
   }
-
-  // 2. Validate contract ID from request params
-  const { contractId } = req.params;
-  if (!contractId || typeof contractId !== 'string' || !Types.ObjectId.isValid(contractId)) {
-    throw new AppError('Invalid contract ID format.', 400);
-  }
-
-  // 3. Find contract scoped strictly to authenticated user's ID
-  const contract = await ContractModel.findOne({
-    _id: new Types.ObjectId(contractId),
-    userId: new Types.ObjectId(userId),
-  });
-
-  // 4. Handle contract not found
-  if (!contract) {
-    throw new AppError('Contract not found.', 404);
-  }
-
-  // 5. Delete all associated chunks from MongoDB
-  await ContractChunkModel.deleteMany({ contractId: contract._id });
-
-  // 6. Delete PDF from Cloudinary if stored publicId is available
-  if (contract.cloudinaryPublicId) {
-    await deleteContractPDF(contract.cloudinaryPublicId);
-  }
-
-  // 7. Delete contract document from MongoDB only after handling its associated data
-  await ContractModel.deleteOne({ _id: contract._id, userId: new Types.ObjectId(userId) });
-
-  // 8. Send success response
-  res.status(200).json({
-    success: true,
-    message: 'Contract deleted successfully.',
-  });
-});
+);
 
 export const downloadContract = asyncHandler(async (req: Request, res: Response): Promise<void> => {
   // 1. Validate authenticated user ID

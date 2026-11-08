@@ -6,25 +6,33 @@ export interface User extends Document {
     password: string;
     createdAt?: Date;
     updatedAt?: Date;
+    tokenVersion: number
 }
 
 const UserSchema = new Schema<User>({
-    name:{
-        type:String,
-        required:true
+    name: {
+        type: String,
+        required: true
     },
-    email:{
-        type:String,
-        unique:true,
-        required:true
+    email: {
+        type: String,
+        required: true,
+        unique: true,
+        lowercase: true,
+        trim: true,
     },
-    password:{
-        type:String,
-        required:true
-    }
+    password: {
+        type: String,
+        required: true
+    },
+    tokenVersion: {
+        type: Number,
+        default: 0,
+        required: true,
+    },
 },
-{
-    timestamps:true
-})
+    {
+        timestamps: true
+    })
 
-export default mongoose.model<User>('User',UserSchema);
+export default mongoose.model<User>('User', UserSchema);
