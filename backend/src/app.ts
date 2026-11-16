@@ -4,6 +4,7 @@ import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth.routes';
 import contractRoutes from './routes/contract.routes';
 import userRoutes from './routes/user.routes';
+import chatRoutes from './routes/chat.routes'
 import { errorHandler } from './middleware/errorHandler.middleware';
 
 const app = express();
@@ -31,6 +32,9 @@ app.use('/api/users', userRoutes);
 
 // Contract routes
 app.use('/api/contracts', contractRoutes);
+
+// Chats routes
+app.use('/api', chatRoutes);
 
 // Global error handling middleware (must be registered after routes)
 app.use(errorHandler);

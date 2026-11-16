@@ -9,12 +9,11 @@ import { requireAuth } from '../middleware/auth.middleware';
 
 const router = Router();
 
-// All user-management routes require a valid access token
 router.use(requireAuth);
 
-router.get('/me', getMyProfile);
-router.patch('/me', updateMyProfile);
-router.patch('/me/password', changePassword);
-router.delete('/me', deleteMyAccount);
+router.get('/get', getMyProfile);
+router.patch('/update', updateMyProfile);
+router.patch('/change/password', changePassword);
+router.delete('/delete', deleteMyAccount);
 
 export default router;

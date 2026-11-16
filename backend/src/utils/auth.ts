@@ -20,7 +20,8 @@ export const comparePassword = async (
 // Generate a short-lived access token
 export const generateAccessToken = (
   userId: string,
-  tokenVersion: number
+  tokenVersion: number,
+  sessionId: string
 ): string => {
   const secret = process.env.ACCESS_TOKEN_SECRET;
 
@@ -29,7 +30,11 @@ export const generateAccessToken = (
   }
 
   return jwt.sign(
-    { userId, tokenVersion },
+    {
+      userId,
+      tokenVersion,
+      sessionId,
+    },
     secret,
     { expiresIn: '15m' }
   );

@@ -141,19 +141,21 @@ export const register = asyncHandler(
 
     const userId = user._id.toString();
 
-    const accessToken = generateAccessToken(
-      user._id.toString(),
-      user.tokenVersion
-    );
     const refreshToken = generateRefreshToken(userId);
 
     const refreshTokenHash = hashToken(refreshToken);
 
-    await SessionModel.create({
+    const session = await SessionModel.create({
       userId: user._id,
       refreshTokenHash,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
     });
+
+    const accessToken = generateAccessToken(
+      userId,
+      user.tokenVersion,
+      session._id.toString()
+    );
 
     res.cookie(
       'refreshToken',
@@ -172,6 +174,7 @@ export const register = asyncHandler(
         createdAt: user.createdAt,
       },
     });
+
   }
 );
 
@@ -207,26 +210,36 @@ export const login = asyncHandler(
 
     const userId = user._id.toString();
 
-    const accessToken = generateAccessToken(
-      user._id.toString(),
-      user.tokenVersion
-    );
+    // 1. Generate refresh token
     const refreshToken = generateRefreshToken(userId);
 
+    // 2. Hash refresh token
     const refreshTokenHash = hashToken(refreshToken);
 
-    await SessionModel.create({
+    // 3. Create session in MongoDB
+    const session = await SessionModel.create({
       userId: user._id,
       refreshTokenHash,
-      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      expiresAt: new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000
+      ),
     });
 
+    // 4. Generate access token with session ID
+    const accessToken = generateAccessToken(
+      userId,
+      user.tokenVersion,
+      session._id.toString()
+    );
+
+    // 5. Set refresh token cookie
     res.cookie(
       'refreshToken',
       refreshToken,
       REFRESH_TOKEN_COOKIE_OPTIONS
     );
 
+    // 6. Send response
     res.status(200).json({
       success: true,
       message: 'Login successful.',
@@ -241,6 +254,7 @@ export const login = asyncHandler(
   }
 );
 
+
 export const refreshAccessToken = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
     const incomingToken: string | undefined = req.cookies?.refreshToken;
@@ -252,7 +266,7 @@ export const refreshAccessToken = asyncHandler(
     // Step 1: Verify refresh token
     const payload = verifyRefreshToken(incomingToken);
 
-    if (!payload || !payload.userId) {
+    if (!payload || typeof payload.userId !== 'string') {
       throw new AppError('Invalid or expired refresh token.', 401);
     }
 
@@ -263,18 +277,12 @@ export const refreshAccessToken = asyncHandler(
 
     // Step 2: Start MongoDB transaction
     await mongoose.connection.transaction(async (dbSession) => {
-      // Step 3: Find and delete old session
-      const session = await SessionModel.findOneAndDelete(
-        { refreshTokenHash: incomingHash },
-        {
-          session: dbSession,
-          projection: {
-            refreshTokenHash: 1,
-            userId: 1,
-            expiresAt: 1,
-          },
-        }
-      );
+      // Step 3: Find existing session
+      const session = await SessionModel.findOne({
+        refreshTokenHash: incomingHash,
+      })
+        .select('+refreshTokenHash')
+        .session(dbSession);
 
       if (!session) {
         throw new AppError(
@@ -283,7 +291,7 @@ export const refreshAccessToken = asyncHandler(
         );
       }
 
-      // Step 4: Verify session expiry
+      // Step 4: Check session expiration
       if (session.expiresAt <= new Date()) {
         throw new AppError(
           'Session has expired. Please log in again.',
@@ -291,7 +299,12 @@ export const refreshAccessToken = asyncHandler(
         );
       }
 
-      // Step 5: Verify user exists
+      // Step 5: Verify token ownership
+      if (session.userId.toString() !== payload.userId) {
+        throw new AppError('Token payload mismatch.', 401);
+      }
+
+      // Step 6: Find user
       const user = await UserModel.findById(
         session.userId
       ).session(dbSession);
@@ -303,37 +316,50 @@ export const refreshAccessToken = asyncHandler(
         );
       }
 
-      // Step 6: Verify token belongs to this user
-      if (session.userId.toString() !== payload.userId) {
-        throw new AppError('Token payload mismatch.', 401);
-      }
-
-      // Step 7: Generate replacement tokens
+      // Step 7: Generate new refresh token
       const userId = user._id.toString();
-
-      const accessToken = generateAccessToken(
-        user._id.toString(),
-        user.tokenVersion
-      );
       const refreshToken = generateRefreshToken(userId);
 
-      // Step 8: Create replacement session
-      await SessionModel.create(
-        [
-          {
-            userId: user._id,
+      // Step 8: Update the SAME MongoDB session
+      const updatedSession = await SessionModel.findOneAndUpdate(
+        {
+          _id: session._id,
+          refreshTokenHash: incomingHash,
+          expiresAt: { $gt: new Date() },
+        },
+        {
+          $set: {
             refreshTokenHash: hashToken(refreshToken),
-            expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
+            expiresAt: new Date(
+              Date.now() + REFRESH_TOKEN_TTL_MS
+            ),
           },
-        ],
-        { session: dbSession }
+        },
+        {
+          new: true,
+          session: dbSession,
+        }
+      );
+
+      if (!updatedSession) {
+        throw new AppError(
+          'Refresh token has already been used or revoked.',
+          401
+        );
+      }
+
+      // Step 9: Generate access token with SAME session ID
+      const accessToken = generateAccessToken(
+        userId,
+        user.tokenVersion,
+        updatedSession._id.toString()
       );
 
       newAccessToken = accessToken;
       newRefreshToken = refreshToken;
     });
 
-    // Step 9: Only send tokens after transaction commits
+    // Step 10: Send response after transaction commits
     if (!newAccessToken || !newRefreshToken) {
       throw new AppError('Unable to rotate refresh token.', 500);
     }
@@ -353,21 +379,26 @@ export const refreshAccessToken = asyncHandler(
 
 export const logout = asyncHandler(
   async (req: Request, res: Response): Promise<void> => {
-    const incomingToken: string | undefined = req.cookies?.refreshToken;
+    const userId = req.userId;
+    const sessionId = req.sessionId;
 
-    if (incomingToken) {
-      const payload = verifyRefreshToken(incomingToken);
-      if (payload) {
-        // Revoke the specific session matching this token hash only
-        const tokenHash = hashToken(incomingToken);
-        await SessionModel.deleteOne({ refreshTokenHash: tokenHash });
-      }
-      // If JWT is invalid, the session (if any) expired naturally via MongoDB TTL.
-      // Either way, clear the cookie.
+    if (!userId || !sessionId) {
+      throw new AppError('Unauthorized.', 401);
     }
 
-    res.clearCookie('refreshToken', CLEAR_REFRESH_TOKEN_COOKIE_OPTIONS);
+    // Step 1: Revoke the authenticated session
+    await SessionModel.deleteOne({
+      _id: sessionId,
+      userId,
+    });
 
+    // Step 2: Clear refresh-token cookie
+    res.clearCookie(
+      'refreshToken',
+      CLEAR_REFRESH_TOKEN_COOKIE_OPTIONS
+    );
+
+    // Step 3: Send response
     res.status(200).json({
       success: true,
       message: 'Logged out successfully.',
@@ -474,8 +505,8 @@ export const updateMyProfile = asyncHandler(
     }
 
     if (!updatedUser) {
-  throw new AppError('User not found.', 404);
-}
+      throw new AppError('User not found.', 404);
+    }
 
     res.status(200).json({
       success: true,

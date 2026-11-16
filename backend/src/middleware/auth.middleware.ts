@@ -1,55 +1,105 @@
+
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-
+import { Types } from 'mongoose';
+import UserModel from '../models/user.model';
+import SessionModel from '../models/Session.model';
 
 declare global {
   namespace Express {
     interface Request {
-      userId?: string; 
+      userId?: string;
+      sessionId?: string;
     }
   }
 }
 
-// Define an interface for the expected structure of our decoded JWT payload
-interface JwtPayload {
-  userId: string;
-}
 
-/**
- * Authentication middleware that verifies a JWT token from the Authorization header.
- */
-export const requireAuth = (
+export const requireAuth = async (
   req: Request,
   res: Response,
   next: NextFunction
-): void => {
-  
+): Promise<void> => {
   const authHeader = req.headers.authorization;
 
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ error: 'No token provided' });
-    return; 
+    return;
   }
 
-  const token = authHeader.split(' ')[1];
+  const token = authHeader.slice(7).trim();
 
   try {
-    const secret = process.env.JWT_SECRET;
+    const secret = process.env.ACCESS_TOKEN_SECRET;
+
     if (!secret) {
-      console.error('JWT_SECRET environment variable is missing.');
+      console.error('ACCESS_TOKEN_SECRET is missing.');
       res.status(500).json({ error: 'Internal server error' });
       return;
     }
 
-   
-    const decoded = jwt.verify(token, secret) as JwtPayload;
+    // Step 1: Verify access token
+    const decoded = jwt.verify(token, secret);
 
-    req.userId = decoded.userId;
+    // Step 2: Validate JWT payload
+    if (
+      typeof decoded === 'string' ||
+      typeof decoded.userId !== 'string' ||
+      !Types.ObjectId.isValid(decoded.userId) ||
+      !Number.isSafeInteger(decoded.tokenVersion) ||
+      decoded.tokenVersion < 0 ||
+      typeof decoded.sessionId !== 'string' ||
+      !Types.ObjectId.isValid(decoded.sessionId)
+    ) {
+      res.status(401).json({ error: 'Invalid access token' });
+      return;
+    }
 
-    // 7. Everything is valid. Call next() to pass control to the actual route handler!
+    // Step 3: Find user
+    const user = await UserModel.findById(
+      decoded.userId
+    ).select('tokenVersion');
+
+    if (!user) {
+      res.status(401).json({ error: 'User not found' });
+      return;
+    }
+
+    // Step 4: Verify tokenVersion
+    if (decoded.tokenVersion !== user.tokenVersion) {
+      res.status(401).json({
+        error: 'Session expired. Please log in again.',
+      });
+      return;
+    }
+
+    // Step 5: Check whether the session still exists
+    const session = await SessionModel.findOne({
+      _id: decoded.sessionId,
+      userId: user._id,
+      expiresAt: { $gt: new Date() },
+    }).select('_id');
+
+    if (!session) {
+      res.status(401).json({
+        error: 'Session has expired or been revoked. Please log in again.',
+      });
+      return;
+    }
+
+    // Step 6: Attach authenticated user and session IDs
+    req.userId = user._id.toString();
+    req.sessionId = session._id.toString();
+
     next();
   } catch (error) {
-    
-    res.status(401).json({ error: 'Invalid or expired token' });
+    if (error instanceof jwt.JsonWebTokenError) {
+      res.status(401).json({
+        error: 'Invalid or expired token',
+      });
+      return;
+    }
+
+    next(error);
   }
 };
