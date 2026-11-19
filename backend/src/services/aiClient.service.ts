@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI, TaskType } from '@google/generative-ai';
 
-// Re-export TaskType so consumers of aiClient can specify RETRIEVAL_QUERY or RETRIEVAL_DOCUMENT
+
 export { TaskType };
 
 if (!process.env.GEMINI_API_KEY) {
@@ -33,24 +33,66 @@ export const getEmbedding = async (
   }
 };
 
+export const callAI = async (
+  systemPrompt: string,
+  userPrompt: string
+): Promise<string> => {
+  const maxAttempts = 3;
 
-export const callAI = async (systemPrompt: string, userPrompt: string): Promise<string> => {
-  try {
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-    const model = genAI.getGenerativeModel({
-      model: 'gemini-3.8-flash',
-      systemInstruction: systemPrompt,
-    });
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      console.log(`Gemini attempt ${attempt}/${maxAttempts}`);
 
-    const result = await model.generateContent(userPrompt);
-    const text = result.response.text();
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-3.5-flash-lite',
+        systemInstruction: systemPrompt,
+      });
 
-    return text || '';
-  } catch (error: any) {
-    throw new Error(`AI request failed: ${error.message || 'Unknown error'}`);
+      console.time('Gemini API response');
+
+      const result = await model.generateContent(userPrompt);
+
+      console.timeEnd('Gemini API response');
+
+      return result.response.text() || '';
+    } catch (error: unknown) {
+      const err = error as {
+        status?: number;
+        message?: string;
+      };
+
+      const status = err.status;
+      const message = err.message || 'Unknown error';
+
+      // Retry only temporary service failures
+      const isRetryable =
+        status === 503 ||
+        status === 502 ||
+        status === 504;
+
+      console.error(
+        `Gemini attempt ${attempt} failed:`,
+        message
+      );
+
+      if (!isRetryable || attempt === maxAttempts) {
+        throw new Error(`AI request failed: ${message}`);
+      }
+
+      // Exponential backoff: 2s, then 4s
+      const delay = 2000 * Math.pow(2, attempt - 1);
+
+      console.log(`Retrying Gemini in ${delay / 1000}s...`);
+
+      await sleep(delay);
+    }
   }
-};
 
+  throw new Error('Gemini request failed.');
+};
 
 export const safeParseJSON = <T>(rawText: string, fallback: T): T => {
   try {
@@ -76,4 +118,3 @@ export const safeParseJSON = <T>(rawText: string, fallback: T): T => {
     return fallback;
   }
 };
- 

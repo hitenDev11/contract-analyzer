@@ -124,7 +124,7 @@ const executeVectorSearch = async (
     const results = await ContractChunkModel.aggregate<RawChunkDocument>(pipeline).exec();
     return results || [];
   } catch (error: any) {
-   
+
     throw new Error(
       `MongoDB Atlas Vector Search failed using index "${config.vectorIndexName}". ` +
       `Ensure that an Atlas Vector Search index is configured on the "contractchunks" collection ` +
@@ -301,12 +301,12 @@ export const retrieveRelevantChunks = async (
     throw new Error(`Contract not found with ID: "${contractId}".`);
   }
 
- 
+
   const queryEmbedding = await getEmbedding(trimmedQuestion, TaskType.RETRIEVAL_QUERY);
 
   const vectorResults = await executeVectorSearch(contractObjectId, queryEmbedding, config);
 
-  
+
   let keywordResults: RawChunkDocument[] = [];
   if (config.hybridEnabled) {
     keywordResults = await executeKeywordSearch(contractObjectId, trimmedQuestion, config);
@@ -542,29 +542,54 @@ export const answerContractQuestion = async (
   question: string,
   options?: Partial<RagSearchConfig>
 ): Promise<RAGResponse> => {
-  const { contractObjectId, trimmedQuestion } = validateInputs(contractId, question);
+  console.log('1. RAG started');
 
-  // Step 1: Retrieve relevant chunks
-  const retrievedChunks = await retrieveRelevantChunks(contractObjectId.toString(), trimmedQuestion, options);
+  const { contractObjectId, trimmedQuestion } =
+    validateInputs(contractId, question);
 
-  // Step 2: Handle case where no relevant chunks exist in database
+  console.log('2. Retrieving relevant chunks...');
+
+  console.time('RAG retrieval');
+
+  const retrievedChunks = await retrieveRelevantChunks(
+    contractObjectId.toString(),
+    trimmedQuestion,
+    options
+  );
+
+  console.timeEnd('RAG retrieval');
+
+  console.log(
+    '3. Retrieved chunks:',
+    retrievedChunks.length
+  );
+
   if (retrievedChunks.length === 0) {
     return {
       question: trimmedQuestion,
       contractId: contractObjectId.toString(),
-      answer: 'No relevant contract sections were found to answer your question. Please verify the contract content or rephrase your question.',
+      answer: 'No relevant contract sections were found.',
       confidence: 'insufficient_information',
       citations: [],
       directEvidence: [],
-      interpretation: 'Zero matching chunks were returned by vector or keyword search for this contract ID.',
+      interpretation: 'No matching chunks found.',
       retrievedChunks: [],
     };
   }
 
-  // Step 3: Generate grounded response using retrieved context
-  const aiResult = await generateContractAnswer(trimmedQuestion, retrievedChunks);
+  console.log('4. Generating Gemini answer...');
 
-  // Step 4: Return consolidated, typed response
+  console.time('Gemini generation');
+
+  const aiResult = await generateContractAnswer(
+    trimmedQuestion,
+    retrievedChunks
+  );
+
+  console.timeEnd('Gemini generation');
+
+  console.log('5. Gemini answer generated');
+
   return {
     question: trimmedQuestion,
     contractId: contractObjectId.toString(),
