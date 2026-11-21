@@ -65,12 +65,29 @@ export const askQuestion = asyncHandler(
       );
     }
 
-    // Step 6: Generate RAG answer
+    // Fetch the last 6 messages for this user and contract
+    const previousMessages = await ChatMessageModel.find({
+      contractId: contract._id,
+      userId,
+    })
+      .select('role content')
+      .sort({ createdAt: -1, _id: -1 })
+      .limit(6)
+      .lean();
+
+    // Restore chronological order
+    previousMessages.reverse();
+
+    // Generate answer with conversation context
     const result = await answerContractQuestion(
       contractId,
-      trimmedQuestion
+      trimmedQuestion,
+      undefined,
+      previousMessages.map((message) => ({
+        role: message.role,
+        content: message.content,
+      }))
     );
-
 
     const citedChunkIds = [
       ...new Set(

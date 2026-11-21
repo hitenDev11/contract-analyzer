@@ -54,6 +54,12 @@ export interface ContractAnswerResult {
   interpretation?: string;
 }
 
+export interface ConversationMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+
 export interface RAGResponse {
   question: string;
   contractId: string;
@@ -381,11 +387,12 @@ const createSafeFallback = (reason?: string): ContractAnswerResult => ({
 
 export const generateContractAnswer = async (
   question: string,
-  chunks: RetrievedChunk[]
+  chunks: RetrievedChunk[],
+  conversationHistory: ConversationMessage[] = []
 ): Promise<ContractAnswerResult> => {
   const trimmedQuestion = question.trim();
 
-  // Guard: If no chunks were supplied, return immediately without calling Gemini
+
   if (!chunks || chunks.length === 0) {
     return {
       answer: 'The retrieved contract text does not contain enough information to answer this question.',
@@ -396,7 +403,6 @@ export const generateContractAnswer = async (
     };
   }
 
-  // Strengthened System Prompt: Strict instructions for legal contract analysis and output validation
   const systemPrompt = `You are an expert legal contract analyst and compliance auditor.
 Your job is to answer user questions about a specific legal contract based ONLY and EXCLUSIVELY on the provided contract excerpts.
 
@@ -419,7 +425,6 @@ RESPONSE FORMAT (JSON ONLY):
   "interpretation": "Explanation of how the clauses apply to the user's question, if applicable."
 }`;
 
-  // Build the user prompt with organized, delimited chunks
   const formattedChunks = chunks
     .map(
       (chunk) =>
@@ -427,7 +432,31 @@ RESPONSE FORMAT (JSON ONLY):
     )
     .join('\n\n');
 
-  const userPrompt = `Below are the retrieved contract excerpts for reference.
+
+  const conversationContext = conversationHistory.length
+    ? conversationHistory
+      .map(
+        (message) =>
+          `${message.role === 'user' ? 'User' : 'Assistant'}: ${message.content}`
+      )
+      .join('\n')
+    : 'No previous conversation.';
+
+
+  const userPrompt = `
+Below are the retrieved contract excerpts for reference.
+
+<conversation_history>
+${conversationContext}
+</conversation_history>
+
+IMPORTANT RULES:
+- Use previous messages only to understand the current question.
+- Previous assistant answers are not verified contract evidence.
+- The retrieved contract chunks are the only source of factual claims about the contract.
+- Never cite conversation messages as contract evidence.
+- If the retrieved chunks do not support an answer, return insufficient_information.
+- Follow the existing citation and JSON output requirements.
 
 <contract_context>
 ${formattedChunks}
@@ -435,42 +464,40 @@ ${formattedChunks}
 
 User Question: ${trimmedQuestion}
 
-Remember: Base your response exclusively on the text in <contract_context>. If the excerpts do not contain the answer, set "confidence": "insufficient_information" and state that the contract text does not contain sufficient information. Respond with ONLY the required JSON object.`;
+Remember: Base your response exclusively on the text in <contract_context>.
+If the excerpts do not contain the answer, set "confidence": "insufficient_information"
+and state that the contract text does not contain sufficient information.
 
-  // Call Gemini AI via the existing aiClient service (API errors bubble up naturally)
+Respond with ONLY the required JSON object.
+`;
+
+ 
   const rawAIResponse = await callAI(systemPrompt, userPrompt);
 
-  // 1. Runtime validation: Parse JSON safely without throwing
   const rawParsed = safeParseJSON<unknown>(rawAIResponse, null);
 
-  // If JSON is malformed or not a non-null object (e.g. array or primitive), return safe fallback
   if (!rawParsed || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
     return createSafeFallback('The AI response was not valid JSON.');
   }
 
   const candidate = rawParsed as Record<string, unknown>;
 
-  // 2. Runtime validation: Validate 'answer' must be a non-empty string
   if (typeof candidate.answer !== 'string' || candidate.answer.trim().length === 0) {
     return createSafeFallback('The AI response was missing a valid "answer" text field.');
   }
 
-  // 3. Runtime validation: Validate 'confidence' must be one of the four allowed enum values
   if (!isValidConfidence(candidate.confidence)) {
     return createSafeFallback('The AI response contained an invalid or missing "confidence" level.');
   }
 
-  // 4. Runtime validation: Validate 'citations' must be an array
   if (!Array.isArray(candidate.citations)) {
     return createSafeFallback('The AI response contained an invalid "citations" field (expected an array).');
   }
 
-  // 5. Runtime validation: Validate 'directEvidence' must be an array
   if (!Array.isArray(candidate.directEvidence)) {
     return createSafeFallback('The AI response contained an invalid "directEvidence" field (expected an array).');
   }
 
-  // 6. Runtime validation: Validate 'interpretation' must be undefined, null, or a string
   if (
     candidate.interpretation !== undefined &&
     candidate.interpretation !== null &&
@@ -479,7 +506,6 @@ Remember: Base your response exclusively on the text in <contract_context>. If t
     return createSafeFallback('The AI response contained an invalid "interpretation" field (expected a string).');
   }
 
-  // 7. Citation validation: Only allow citations that match valid numeric chunkIndex values in supplied chunks
   const validChunkIndexSet = new Set<number>();
   for (const chunk of chunks) {
     if (
@@ -506,7 +532,6 @@ Remember: Base your response exclusively on the text in <contract_context>. If t
   }
   validatedCitations.sort((a, b) => a - b);
 
-  // 8. Direct evidence validation: Verify that every quotation appears in the supplied contract chunks
   const normalizedChunkTexts = chunks.map((chunk) => normalizeWhitespace(chunk.chunkText));
   const validatedDirectEvidence: string[] = [];
 
@@ -521,7 +546,6 @@ Remember: Base your response exclusively on the text in <contract_context>. If t
     }
   }
 
-  // 9. Interpretation processing
   const validatedInterpretation =
     typeof candidate.interpretation === 'string' && candidate.interpretation.trim().length > 0
       ? candidate.interpretation.trim()
@@ -536,12 +560,13 @@ Remember: Base your response exclusively on the text in <contract_context>. If t
   };
 };
 
-
 export const answerContractQuestion = async (
   contractId: string,
   question: string,
-  options?: Partial<RagSearchConfig>
+  options?: Partial<RagSearchConfig>,
+  conversationHistory: ConversationMessage[] = []
 ): Promise<RAGResponse> => {
+
   console.log('1. RAG started');
 
   const { contractObjectId, trimmedQuestion } =
@@ -583,7 +608,8 @@ export const answerContractQuestion = async (
 
   const aiResult = await generateContractAnswer(
     trimmedQuestion,
-    retrievedChunks
+    retrievedChunks,
+    conversationHistory
   );
 
   console.timeEnd('Gemini generation');
