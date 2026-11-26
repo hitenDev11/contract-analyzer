@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import ContractChunkModel, { ContractChunk } from '../models/contract-chunks.model';
 import ContractModel from '../models/contract.model';
 import { getEmbedding, callAI, safeParseJSON, TaskType } from './aiClient.service';
+import { rewriteQuestion } from './questionRewrite.service';
 
 
 export interface RagSearchConfig {
@@ -471,7 +472,7 @@ and state that the contract text does not contain sufficient information.
 Respond with ONLY the required JSON object.
 `;
 
- 
+
   const rawAIResponse = await callAI(systemPrompt, userPrompt);
 
   const rawParsed = safeParseJSON<unknown>(rawAIResponse, null);
@@ -572,13 +573,30 @@ export const answerContractQuestion = async (
   const { contractObjectId, trimmedQuestion } =
     validateInputs(contractId, question);
 
-  console.log('2. Retrieving relevant chunks...');
+  console.log('2. Rewriting question...');
+
+  // Measure question rewriting time
+  console.time('Question rewriting');
+
+  const searchQuestion = await rewriteQuestion(
+    trimmedQuestion,
+    conversationHistory
+  );
+
+  console.timeEnd('Question rewriting');
+
+  // Debug original and rewritten questions
+  console.log('Original question:', trimmedQuestion);
+  console.log('Search question:', searchQuestion);
+
+  // Measure retrieval time separately
+  console.log('3. Retrieving relevant chunks...');
 
   console.time('RAG retrieval');
 
   const retrievedChunks = await retrieveRelevantChunks(
-    contractObjectId.toString(),
-    trimmedQuestion,
+    contractId,
+    searchQuestion,
     options
   );
 
